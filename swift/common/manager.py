@@ -184,6 +184,7 @@ class Manager(object):
     """
 
     def __init__(self, servers, run_dir=RUN_DIR):
+        print("in manager class")
         self.server_names = set()
         self._default_strict = True
         for server in servers:
@@ -219,6 +220,7 @@ class Manager(object):
     def start(self, **kwargs):
         """starts a server
         """
+        print("In start func")
         setup_env()
         status = 0
 
@@ -433,6 +435,7 @@ class Server(object):
         return "%s(%s)" % (self.__class__.__name__, repr(str(self)))
 
     def __hash__(self):
+        print("In __hash__")
         return hash(str(self))
 
     def __eq__(self, other):
