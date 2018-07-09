@@ -46,9 +46,9 @@ class RingData(object):
 
     def __init__(self, replica2part2dev_id, devs, part_shift,
                  next_part_power=None):
-        self.devs = devs
-        self._replica2part2dev_id = replica2part2dev_id
-        self._part_shift = part_shift
+        self.devs = devs  # device dict
+        self._replica2part2dev_id = replica2part2dev_id  # 2D array
+        self._part_shift = part_shift  # how much to shift the hash by to get the partition bits
         self.next_part_power = next_part_power
 
         for dev in self.devs:
@@ -201,11 +201,30 @@ class Ring(object):
             self.serialized_path = os.path.join(serialized_path)
         self.reload_time = reload_time
         self._validation_hook = validation_hook
+        '''
+        Added by me:
+        ring is reloaded when it is instansiated in storage_policies.py
+        '''
         self._reload(force=True)
 
     def _reload(self, force=False):
+        '''
+        Added by me:
+        This will reload the ring objects if it has been changed. It checks every 15 secs.
+        All the values like self._replica2dev2id ,self._dev will be assigned here.  They are not
+        assigned in the constructor
+        '''
         self._rtime = time() + self.reload_time
         if force or self.has_changed():
+            '''
+            Added by me:
+            if we force it then proceed otherwise check if the ring has been changed by comparing the timestamp
+            of the ring file(using os module) with the timestamp of the Ring Object.
+            '''
+            '''
+            Added by me:
+            Load the ring data from the ring data object
+            '''
             ring_data = RingData.load(self.serialized_path)
 
             try:
@@ -217,7 +236,10 @@ class Ring(object):
                     # In runtime reload at working server, it's ok to use old
                     # ring data if the new ring data is invalid.
                     return
-
+            '''
+            Added by me:
+            Update the timestamp of the ring object
+            '''
             self._mtime = getmtime(self.serialized_path)
             self._devs = ring_data.devs
             # NOTE(akscram): Replication parameters like replication_ip
@@ -355,6 +377,10 @@ class Ring(object):
         """
 
         if time() > self._rtime:
+            '''
+            Added by me:
+            Check if the ring is renewed every 15 secs
+            '''
             self._reload()
         return self._get_part_nodes(part)
 
@@ -387,6 +413,8 @@ class Ring(object):
                 hardware description
         ======  ===============================================================
         """
+        print("serialized_path is {}".format(self.serialized_path))
+        #  print("RING DS is {}".format(len(self._replica2part2dev_id[0])))
         part = self.get_part(account, container, obj)
         return part, self._get_part_nodes(part)
 
