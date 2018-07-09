@@ -2368,6 +2368,7 @@ def hash_path(account, container=None, object=None, raw_digest=False):
     if object:
         paths.append(object if isinstance(object, six.binary_type)
                      else object.encode('utf8'))
+    print("Paths are {}".format(paths))
     if raw_digest:
         return md5(HASH_PATH_PREFIX + b'/' + b'/'.join(paths)
                    + HASH_PATH_SUFFIX).digest()
