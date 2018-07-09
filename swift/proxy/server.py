@@ -95,6 +95,7 @@ class ProxyOverrideOptions(object):
     :param conf: the proxy-server config dict.
     :param override_conf: a dict of overriding configuration options.
     """
+
     def __init__(self, base_conf, override_conf):
         def get(key, default):
             return override_conf.get(key, base_conf.get(key, default))
@@ -161,6 +162,7 @@ class Application(object):
 
     def __init__(self, conf, memcache=None, logger=None, account_ring=None,
                  container_ring=None):
+        print("Proxy is started")
         if conf is None:
             conf = {}
         if logger is None:
@@ -376,6 +378,7 @@ class Application(object):
 
         :raises ValueError: (thrown by split_path) if given invalid path
         """
+
         if req.path == '/info':
             d = dict(version=None,
                      expose_info=self.expose_info,
@@ -388,8 +391,18 @@ class Application(object):
                  account_name=account,
                  container_name=container,
                  object_name=obj)
+        '''
+        Added By me: Invalid api version. The authentication protocol version
+        is not recoginzed
+        '''
         if account and not valid_api_version(version):
             raise APIVersionError('Invalid path')
+        '''
+        Added By me :
+        If object is to be stored,get the storage policy associated with the container
+        where the object is to be stored
+
+        '''
         if obj and container and account:
             info = get_container_info(req.environ, self)
             policy_index = req.headers.get('X-Backend-Storage-Policy-Index',
@@ -421,6 +434,9 @@ class Application(object):
         :param env: WSGI environment dictionary
         :param start_response: WSGI callable
         """
+
+        print("In server now")
+
         try:
             if self.memcache is None:
                 self.memcache = cache_from_env(env, True)
@@ -436,10 +452,15 @@ class Application(object):
             return ['Internal server error.\n']
 
     def update_request(self, req):
+        '''
+                Added by me:
+                x-storage-token is same as x-auth-token. It is used in different versions
+        '''
         if 'x-storage-token' in req.headers and \
                 'x-auth-token' not in req.headers:
             req.headers['x-auth-token'] = req.headers['x-storage-token']
         return req
+    # pdb.set_trace()
 
     def handle_request(self, req):
         """
@@ -448,6 +469,9 @@ class Application(object):
 
         :param req: swob.Request object
         """
+        print("In handle request function")
+        # Added by me :
+        # Checks whether content length is correct
         try:
             self.logger.set_statsd_prefix('proxy-server')
             if req.content_length and req.content_length < 0:
@@ -466,23 +490,52 @@ class Application(object):
                     request=req, body='Invalid UTF8 or contains NULL')
 
             try:
+                '''
+                                Added by me:
+                                which controller to use is found out from the function below
+                '''
                 controller, path_parts = self.get_controller(req)
+                print("Controller is {}".format(controller))
+                '''
+                Added by me:
+                If the auth version is wrong
+                '''
             except APIVersionError:
                 self.logger.increment('errors')
                 return HTTPBadRequest(request=req)
+                '''
+                Added by me :
+
+                '''
             except ValueError:
                 self.logger.increment('errors')
                 return HTTPNotFound(request=req)
+                '''
+                Added by me:
+                if controller is not found
+                '''
             if not controller:
                 self.logger.increment('errors')
                 return HTTPPreconditionFailed(request=req, body='Bad URL')
+                '''
+                Added by me:
+                host is in blacklist
+                '''
             if self.deny_host_headers and \
                     req.host.split(':')[0] in self.deny_host_headers:
                 return HTTPForbidden(request=req, body='Invalid host header')
 
             self.logger.set_statsd_prefix('proxy-server.' +
                                           controller.server_type.lower())
-            controller = controller(self, **path_parts)
+            '''
+            Added by me :
+            Till here , which ObjectController to use is decided and we proceed with the controller
+            '''
+            controller = controller(self, **path_parts)  # proxy server itself is passed as parameter?
+            '''
+            Added by me :
+            Set the transaction_id if not set before
+            '''
             if 'swift.trans_id' not in req.environ:
                 # if this wasn't set by an earlier middleware, set it now
                 trans_id_suffix = self.trans_id_suffix
@@ -495,13 +548,23 @@ class Application(object):
             req.headers['x-trans-id'] = req.environ['swift.trans_id']
             controller.trans_id = req.environ['swift.trans_id']
             self.logger.client_ip = get_remote_client(req)
-
+            '''
+            Added by me:
+            Based on the request method , the appropriate function is called
+            First,we check whether a valid method was called.
+            '''
             if req.method not in controller.allowed_methods:
                 return HTTPMethodNotAllowed(request=req, headers={
                     'Allow': ', '.join(controller.allowed_methods)})
             handler = getattr(controller, req.method)
-
+            print("Handler is {}".format(handler))
+            print("Handler is assigned a value")
+            '''
+            added by me:
+            Come back to this part of the code
+            '''
             old_authorize = None
+            print("Request environ is {}".format(req.environ))
             if 'swift.authorize' in req.environ:
                 # We call authorize before the handler, always. If authorized,
                 # we remove the swift.authorize hook so isn't ever called
@@ -509,9 +572,11 @@ class Application(object):
                 # controller's method indicates it'd like to gather more
                 # information and try again later.
                 resp = req.environ['swift.authorize'](req)
+                print(resp)
                 if not resp:
                     # No resp means authorized, no delayed recheck required.
                     old_authorize = req.environ['swift.authorize']
+                    print("Old auth is {}".format(old_authorize.__dict__))
                 else:
                     # Response indicates denial, but we might delay the denial
                     # and recheck later. If not delayed, return the error now.
@@ -522,9 +587,12 @@ class Application(object):
             # method the client actually sent.
             req.environ.setdefault('swift.orig_req_method', req.method)
             try:
-                if old_authorize:
+                if old_authorize:  # if successfully authorized
                     req.environ.pop('swift.authorize', None)
-                return handler(req)
+                    print("authorized?")
+                x = handler(req)
+                print("handler(req) is {}".format(x))
+                return x
             finally:
                 if old_authorize:
                     req.environ['swift.authorize'] = old_authorize
@@ -609,7 +677,7 @@ class Application(object):
         error_stats['last_error'] = time()
         self.logger.error(_('%(msg)s %(ip)s:%(port)s/%(device)s'),
                           {'msg': msg, 'ip': node['ip'],
-                          'port': node['port'], 'device': node['device']})
+                           'port': node['port'], 'device': node['device']})
 
     def _incr_node_errors(self, node):
         node_key = self._error_limit_node_key(node)
@@ -627,7 +695,7 @@ class Application(object):
         self._incr_node_errors(node)
         self.logger.error(_('%(msg)s %(ip)s:%(port)s/%(device)s'),
                           {'msg': msg.decode('utf-8'), 'ip': node['ip'],
-                          'port': node['port'], 'device': node['device']})
+                           'port': node['port'], 'device': node['device']})
 
     def iter_nodes(self, ring, partition, node_iter=None, policy=None):
         return NodeIter(self, ring, partition, node_iter=node_iter,
