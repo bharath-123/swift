@@ -120,6 +120,7 @@ class ObjectController(BaseStorageServer):
         <source-dir>/etc/object-server.conf-sample or
         /etc/swift/object-server.conf-sample.
         """
+        print("In Object Server!")
         super(ObjectController, self).__init__(conf)
         self.logger = logger or get_logger(conf, log_route='object-server')
         self.node_timeout = float(conf.get('node_timeout', 3))
@@ -244,6 +245,7 @@ class ObjectController(BaseStorageServer):
         DiskFile class would simply over-ride this method to provide that
         behavior.
         """
+        print("Diskfile according to policy is {}".format(self._diskfile_router[policy]))
         return self._diskfile_router[policy].get_diskfile(
             device, partition, account, container, obj, policy, **kwargs)
 
@@ -385,7 +387,14 @@ class ObjectController(BaseStorageServer):
         headers_out['referer'] = request.as_referer()
         headers_out['X-Backend-Storage-Policy-Index'] = int(policy)
         update_greenthreads = []
+        '''
+        Containers are updated asynchronously
+        '''
         for conthost, contdevice in updates:
+            '''
+            added by me:
+            One thread for 1 container
+            '''
             gt = spawn(self.async_update, op, account, container, obj,
                        conthost, contpartition, contdevice, headers_out,
                        objdevice, policy,
@@ -398,6 +407,7 @@ class ObjectController(BaseStorageServer):
         # after getting a successful response to the object create. The
         # `container_update_timeout` bounds the length of time we wait so that
         # one slow container server doesn't make the entire request lag.
+        print("Headers out : {}".format(headers_out))
         try:
             with Timeout(self.container_update_timeout):
                 for gt in update_greenthreads:
@@ -733,20 +743,42 @@ class ObjectController(BaseStorageServer):
     @timing_stats()
     def PUT(self, request):
         """Handle HTTP PUT requests for the Swift Object Server."""
+        print("In object server now!")
+        '''
+        added by me:
+        Split request path.
+        '''
         device, partition, account, container, obj, policy = \
             get_name_and_placement(request, 5, 5, True)
+        '''
+        Added by me:
+        There is a timestamp header(should be added by the proxy)
+        '''
         req_timestamp = valid_timestamp(request)
+        '''
+        Added by me:
+        check whether object is valid.
+        '''
         error_response = check_object_creation(request, obj)
         if error_response:
             return error_response
+        '''
+        Added by me:
+        if X-Delete-At(object expiration time)
+        '''
         new_delete_at = int(request.headers.get('X-Delete-At') or 0)
         try:
+            '''
+            Added by me:
+            fsize is the same as content length
+            '''
             fsize = request.message_length()
         except ValueError as e:
             return HTTPBadRequest(body=str(e), request=request,
                                   content_type='text/plain')
 
         # In case of multipart-MIME put, the proxy sends a chunked request,
+
         # but may let us know the real content length so we can verify that
         # we have enough disk space to hold the object.
         if fsize is None:
@@ -757,31 +789,61 @@ class ObjectController(BaseStorageServer):
                 except ValueError as e:
                     return HTTPBadRequest(body=str(e), request=request,
                                           content_type='text/plain')
+        '''
+        Added by me:
+        Now code to write object to disk starts
+        '''
         # SSYNC will include Frag-Index header for subrequests to primary
         # nodes; handoff nodes should 409 subrequests to over-write an
         # existing data fragment until they offloaded the existing fragment
         frag_index = request.headers.get('X-Backend-Ssync-Frag-Index')
+        print("Frag index in PUT is {}".format(frag_index))
         next_part_power = request.headers.get('X-Backend-Next-Part-Power')
+        print("Next_part_power in PUT is {}".format(next_part_power))
         try:
+            '''
+            Added by me:
+            Disk file object is created which is used to write an object to the filesystem.
+            disk file is associated with a particular object,container,account
+            '''
             disk_file = self.get_diskfile(
                 device, partition, account, container, obj,
                 policy=policy, frag_index=frag_index,
                 next_part_power=next_part_power)
+            print("disk file is {}".format(disk_file))
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
+            '''
+            Added by me:
+            now we read the metadata of the object and checks if the file is present
+            else it will set the metadata to {} and init the timestamp of the object
+            '''
         try:
             orig_metadata = disk_file.read_metadata(current_time=req_timestamp)
+            print("The metadata of the file is {}".format(orig_metadata))
             orig_timestamp = disk_file.data_timestamp
+            '''
+            Added by me:
+            THis code was added by me. If object is there then don't write it again
+            '''
+            #  print("The timestamp is {}".format(orig_timestamp))
         except DiskFileXattrNotSupported:
             return HTTPInsufficientStorage(drive=device, request=request)
         except DiskFileDeleted as e:
+            print("In diskfile del")
             orig_metadata = {}
             orig_timestamp = e.timestamp
         except (DiskFileNotExist, DiskFileQuarantined):
+            print("in disk file not exist")
             orig_metadata = {}
             orig_timestamp = Timestamp(0)
 
         # Checks for If-None-Match
+        '''
+        added by me:
+        if orig_match is not empty and the request is a if_none_match then return a 412(object exists)
+        or if the etag in if_none_match matches the etag of the object, then return 412
+        '''
         if request.if_none_match is not None and orig_metadata:
             if '*' in request.if_none_match:
                 # File exists already so return 412
@@ -789,19 +851,50 @@ class ObjectController(BaseStorageServer):
             if orig_metadata.get('ETag') in request.if_none_match:
                 # The current ETag matches, so return 412
                 return HTTPPreconditionFailed(request=request)
-
+        '''
+        Added by me:
+        thats just wrong lol
+        vVV
+        '''
         if orig_timestamp >= req_timestamp:
             return HTTPConflict(
                 request=request,
                 headers={'X-Backend-Timestamp': orig_timestamp.internal})
+
+
+        '''
+        Added by me:
+        if delete-at is there then set orig_delete_at to X-Delete-At otherwise set it to 0
+        '''
         orig_delete_at = int(orig_metadata.get('X-Delete-At') or 0)
+        '''
+        Added by me:
+        i think this is the maximum time an upload can take?
+        '''
         upload_expiration = time.time() + self.max_upload_time
+        '''
+        Added by me:
+        generate an etag for the object
+        '''
         etag = md5()
+        '''
+        Added by me:
+        The race against time for the server begins! It needs to write to the filesystem on the node before upload_expiration.
+        can it do it?? Stay tuned to find out!
+        '''
         elapsed_time = 0
         try:
+            '''
+            Added by me:
+            create will make a diskfile writer and the writer will write it to a temp directory.
+            writer will create a temp_dir and also pre allocate space to it which is equal to content-length
+            '''
             with disk_file.create(size=fsize) as writer:
                 upload_size = 0
-
+                '''
+                Added by me:
+                the scope of write has started
+                '''
                 # If the proxy wants to send us object metadata after the
                 # object body, it sets some headers. We have to tell the
                 # proxy, in the 100 Continue response, that we're able to
@@ -812,17 +905,20 @@ class ObjectController(BaseStorageServer):
                 use_multiphase_commit = False
                 mime_documents_iter = iter([])
                 obj_input = request.environ['wsgi.input']
+                print("obj_input is {}".format(obj_input.__dict__))
 
                 hundred_continue_headers = []
                 if config_true_value(
                         request.headers.get(
                             'X-Backend-Obj-Multiphase-Commit')):
+                    print("Using multiphase commit!")
                     use_multiphase_commit = True
                     hundred_continue_headers.append(
                         ('X-Obj-Multiphase-Commit', 'yes'))
 
                 if config_true_value(
                         request.headers.get('X-Backend-Obj-Metadata-Footer')):
+                    print("We have metadata footer")
                     have_metadata_footer = True
                     hundred_continue_headers.append(
                         ('X-Obj-Metadata-Footer', 'yes'))
@@ -845,25 +941,71 @@ class ObjectController(BaseStorageServer):
                         return HTTPClientDisconnect(request=request)
                     except ChunkReadTimeout:
                         return HTTPRequestTimeout(request=request)
-
+                '''
+                Added by me:
+                This will read the object input from the socket where the proxy put it(in send_file function)
+                it will have a timeout.
+                '''
                 timeout_reader = self._make_timeout_reader(obj_input)
+                print("Timeout reader is {}".format(timeout_reader))
                 try:
+                    '''
+                    Added by me:
+                    It will read the chunk from the socket till we reach ''
+                    as we used that in the _transfer_data function to mark the end of object data
+                    (see end_of_object_data)
+                    '''
                     for chunk in iter(timeout_reader, ''):
+                        print("Chunk is {}".format(chunk))
                         start_time = time.time()
+                        '''
+                        Added by me:
+                        If we cross the expiration time, we return HTTPRequestTimeout
+                        '''
                         if start_time > upload_expiration:
                             self.logger.increment('PUT.timeouts')
                             return HTTPRequestTimeout(request=request)
+                        '''
+                        Added by me:
+                        etag is created for the object
+                        '''
                         etag.update(chunk)
+                        '''
+                        Added by me:
+                        OMGOSH,its finally happening! The object is finally being written!
+                        That was a crazy journey!
+                        '''
+                        '''
+                        Added by me:
+                        add the below line of code after the TimeOutReader finishes reading the object data
+                        from the socket(the object data was sent by the proxy server in _send_file function)
+                        The below line of code will return 412 if the object is already present in the object.
+                        THIS CODE WAS ADDED BY ME
+                        '''
+                        #if orig_metadata:
+                        #    return HTTPPreconditionFailed(request=request)
                         upload_size = writer.write(chunk)
                         elapsed_time += time.time() - start_time
                 except ChunkReadError:
                     return HTTPClientDisconnect(request=request)
                 except ChunkReadTimeout:
                     return HTTPRequestTimeout(request=request)
+                '''
+                Added by me:
+                Now that object is written,we need to check if object is written correctly
+                and also write its metadata
+                '''
                 if upload_size:
+                    '''
+                    Added by me:
+                    If object is uploaded , then log about it!
+                    '''
                     self.logger.transfer_rate(
                         'PUT.' + device + '.timing', elapsed_time,
                         upload_size)
+                '''
+                OBject not uploaded properly!
+                '''
                 if fsize is not None and fsize != upload_size:
                     return HTTPClientDisconnect(request=request)
 
@@ -875,8 +1017,17 @@ class ObjectController(BaseStorageServer):
                 request_etag = (footer_meta.get('etag') or
                                 request.headers.get('etag', '')).lower()
                 etag = etag.hexdigest()
+                '''
+                Added by me:
+                If the objects etag was sent in headers and the object is written to disk
+                but the etags dont match, then thats wrong
+                '''
                 if request_etag and request_etag != etag:
                     return HTTPUnprocessableEntity(request=request)
+                '''
+                Added by me:
+                We now prepare the metadata to add to the xtended file attributes
+                '''
                 metadata = {
                     'X-Timestamp': request.timestamp.internal,
                     'Content-Type': request.headers['content-type'],
@@ -897,12 +1048,14 @@ class ObjectController(BaseStorageServer):
                     if header_key in request.headers:
                         header_caps = header_key.title()
                         metadata[header_caps] = request.headers[header_key]
+                print('object metadata is {}'.format(metadata))
                 writer.put(metadata)
 
                 # if the PUT requires a two-phase commit (a data and a commit
                 # phase) send the proxy server another 100-continue response
                 # to indicate that we are finished writing object data
                 if use_multiphase_commit:
+                    print("Using multiphase commit")
                     request.environ['wsgi.input'].\
                         send_hundred_continue_response()
                     if not self._read_put_commit_message(mime_documents_iter):
@@ -946,6 +1099,10 @@ class ObjectController(BaseStorageServer):
         # apply any container update header overrides sent with request
         self._check_container_override(update_headers, request.headers,
                                        footer_meta)
+        '''
+        Added by me:
+        Update all the containers asynchronously
+        '''
         self.container_update(
             'PUT', account, container, obj, request,
             update_headers,
@@ -1170,6 +1327,7 @@ class ObjectController(BaseStorageServer):
         this verb really just returns the hashes information for the specified
         parameters and is used, for example, by both replication and EC.
         """
+        print("In Replicate")
         device, partition, suffix_parts, policy = \
             get_name_and_placement(request, 2, 3, True)
         suffixes = suffix_parts.split('-') if suffix_parts else []
@@ -1191,9 +1349,13 @@ class ObjectController(BaseStorageServer):
     def __call__(self, env, start_response):
         """WSGI Application entry point for the Swift Object Server."""
         start_time = time.time()
-        req = Request(env)
+        req = Request(env)  # wrap request in swob object
+        print("Request to obj server is {}".format(req.__dict__))
         self.logger.txn_id = req.headers.get('x-trans-id', None)
-
+        '''
+        added by me:
+        checks if request is in utf8
+        '''
         if not check_utf8(req.path_info):
             res = HTTPPreconditionFailed(body='Invalid UTF8 or contains NULL')
         else:
@@ -1203,6 +1365,7 @@ class ObjectController(BaseStorageServer):
                     res = HTTPMethodNotAllowed()
                 else:
                     res = getattr(self, req.method)(req)
+                    print(getattr(self, req.method))
             except DiskFileCollision:
                 res = HTTPForbidden(request=req)
             except HTTPException as error_response:
@@ -1221,6 +1384,11 @@ class ObjectController(BaseStorageServer):
                 self.logger.debug(log_line)
             else:
                 self.logger.info(log_line)
+        '''
+        Added by me:
+        what is this doing? I thhink this lets the remaining threads finish(i.e remaining writes to object servers)
+        vvv
+        '''
         if req.method in ('PUT', 'DELETE'):
             slow = self.slow - trans_time
             if slow > 0:
