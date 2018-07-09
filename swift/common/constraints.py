@@ -130,7 +130,7 @@ def check_metadata(req, target_type):
     meta_size = 0
     for key, value in req.headers.items():
         if (isinstance(value, six.string_types)
-           and len(value) > MAX_HEADER_SIZE):
+                and len(value) > MAX_HEADER_SIZE): # cannot cross maximum size permitted by header
 
             return HTTPBadRequest(body='Header value too long: %s' %
                                   key[:MAX_META_NAME_LENGTH],
@@ -183,23 +183,37 @@ def check_object_creation(req, object_name):
     :returns: HTTPNotImplemented -- unsupported transfer-encoding header value
     """
     try:
-        ml = req.message_length()
+        ml = req.message_length()   # message length(ml) is the same as content-length
     except ValueError as e:
         return HTTPBadRequest(request=req, content_type='text/plain',
                               body=str(e))
     except AttributeError as e:
         return HTTPNotImplemented(request=req, content_type='text/plain',
                                   body=str(e))
+    '''
+    added by me:
+    If message length is greater than permitted max file size
+    request is too large
+    '''
     if ml is not None and ml > MAX_FILE_SIZE:
         return HTTPRequestEntityTooLarge(body='Your request is too large.',
                                          request=req,
                                          content_type='text/plain')
+    '''
+    added by me:
+    if content length is not present and it is not a chunked request
+    return bad request error
+    '''
     if req.content_length is None and \
             req.headers.get('transfer-encoding') != 'chunked':
         return HTTPLengthRequired(body='Missing Content-Length header.',
                                   request=req,
                                   content_type='text/plain')
-
+    '''
+    added by me:
+    if object name is greater than maximum permitted object name length
+    return bad request
+    '''
     if len(object_name) > MAX_OBJECT_NAME_LENGTH:
         return HTTPBadRequest(body='Object name length of %d longer than %d' %
                               (len(object_name), MAX_OBJECT_NAME_LENGTH),
@@ -218,6 +232,10 @@ def check_object_creation(req, object_name):
     if not check_utf8(wsgi_to_str(req.headers['Content-Type'])):
         return HTTPBadRequest(request=req, body='Invalid Content-Type',
                               content_type='text/plain')
+    '''
+    Added by me:
+    check if metadata is all good
+    '''
     return check_metadata(req, 'object')
 
 
@@ -414,6 +432,7 @@ def check_name_format(req, name, target_type):
             request=req,
             body='%s name cannot contain slashes' % target_type)
     return name
+
 
 check_account_format = functools.partial(check_name_format,
                                          target_type='Account')
