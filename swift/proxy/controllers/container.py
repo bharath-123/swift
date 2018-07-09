@@ -39,6 +39,9 @@ class ContainerController(Controller):
                             'x-versions-location']
 
     def __init__(self, app, account_name, container_name, **kwargs):
+        #import pdb
+        #pdb.set_trace()
+        #print("in Container Controller")
         super(ContainerController, self).__init__(app)
         self.account_name = unquote(account_name)
         self.container_name = unquote(container_name)
