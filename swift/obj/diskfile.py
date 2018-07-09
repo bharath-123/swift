@@ -226,6 +226,7 @@ def write_metadata(fd, metadata, xattr_size=65536):
     :param metadata: metadata to write
     """
     metastr = pickle.dumps(_encode_metadata(metadata), PICKLE_PROTOCOL)
+    print("Metastr is {}".format(metastr))
     metastr_md5 = hashlib.md5(metastr).hexdigest().encode('ascii')
     key = 0
     try:
@@ -625,6 +626,7 @@ class DiskFileRouter(object):
         for policy in POLICIES:
             manager_cls = self.policy_type_to_manager_cls[policy.policy_type]
             self.policy_to_manager[int(policy)] = manager_cls(*args, **kwargs)
+        print("Policy to manager dictionary is {}".format(self.policy_type_to_manager_cls))
 
     def __getitem__(self, policy):
         return self.policy_to_manager[int(policy)]
@@ -1334,8 +1336,10 @@ class BaseDiskFileManager(object):
         :param policy: the StoragePolicy instance
         """
         dev_path = self.get_dev_path(device)
+        print("Device path is {}".format(dev_path))
         if not dev_path:
             raise DiskFileDeviceUnavailable()
+        print("The disk file class is {}".format(self.diskfile_cls))
         return self.diskfile_cls(self, dev_path,
                                  partition, account, container, obj,
                                  policy=policy, use_splice=self.use_splice,
@@ -1655,6 +1659,10 @@ class BaseDiskFileWriter(object):
             chunk = chunk[written:]
 
         # For large files sync every 512MB (by default) written
+        '''
+        added by me:
+        for large files,we sync it to the hard disk every 512 mb(by default)
+        '''
         diff = self._upload_size - self._last_sync
         if diff >= self._bytes_per_sync:
             tpool.execute(fdatasync, self._fd)
@@ -1680,9 +1688,11 @@ class BaseDiskFileWriter(object):
         # requests to reference.
         if self._tmppath:
             # It was a named temp file created by mkstemp()
+            print("Renaming file.")
             renamer(self._tmppath, target_path)
         else:
             # It was an unnamed temp file created by open() with O_TMPFILE
+            print("Linking fd {} to path {}".format(self._fd, target_path))
             link_fd_to_path(self._fd, target_path,
                             self._diskfile._dirs_created)
 
@@ -1727,6 +1737,10 @@ class BaseDiskFileWriter(object):
                         from the object dir after the put completes, otherwise
                         obsolete files are left in place.
         """
+        '''
+        Added by me:
+        Rename temp file and then call a thread to go to _finalize_put
+        '''
         timestamp = Timestamp(metadata['X-Timestamp'])
         ctype_timestamp = metadata.get('Content-Type-Timestamp')
         if ctype_timestamp:
@@ -1734,10 +1748,15 @@ class BaseDiskFileWriter(object):
         filename = self.manager.make_on_disk_filename(
             timestamp, self._extension, ctype_timestamp=ctype_timestamp,
             *a, **kw)
+        print("Filename is {}".format(filename))
         metadata['name'] = self._name
         target_path = join(self._datadir, filename)
-
         tpool.execute(self._finalize_put, metadata, target_path, cleanup)
+        '''
+        Added by me:
+        Why thread? why not normal execution?
+        '''
+        # self._finalize_put(metadata, target_path, cleanup)
 
     def put(self, metadata):
         """
@@ -2185,10 +2204,11 @@ class BaseDiskFile(object):
             self._datadir = _datadir
         else:
             name_hash = hash_path(account, container, obj)
+            print("Hash of object is {}".format(name_hash))
             self._datadir = join(
                 device_path, storage_directory(get_data_dir(policy),
                                                partition, name_hash))
-
+            print("Directory where obj is stored is {}".format(self._datadir))
     @property
     def manager(self):
         return self._manager
@@ -2681,6 +2701,10 @@ class BaseDiskFile(object):
         return dr
 
     def _get_tempfile(self):
+        '''
+        Added by me:
+        Create a temp file to store the object in
+        '''
         fallback_to_mkstemp = False
         tmppath = None
         if self._use_linkat:
@@ -2719,6 +2743,11 @@ class BaseDiskFile(object):
         :raises DiskFileNoSpace: if a size is specified and allocation fails
         """
         try:
+            '''
+            Added by me:
+            A temp file is created and the path to the temp file and a file descriptor(used to access the file)]
+            is returned
+            '''
             fd, tmppath = self._get_tempfile()
         except OSError as err:
             if err.errno in (errno.ENOSPC, errno.EDQUOT):
@@ -2726,6 +2755,10 @@ class BaseDiskFile(object):
                 raise DiskFileNoSpace()
             raise
         dfw = None
+        '''
+        Added by me:
+        Create a disk file writer
+        '''
         try:
             if size is not None and size > 0:
                 try:
@@ -2738,6 +2771,7 @@ class BaseDiskFile(object):
                                   bytes_per_sync=self._bytes_per_sync,
                                   diskfile=self,
                                   next_part_power=self.next_part_power)
+            print("dfw is {}".format(dfw.__dict__))
             yield dfw
         finally:
             try:
