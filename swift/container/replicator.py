@@ -39,6 +39,7 @@ class ContainerReplicator(db_replicator.Replicator):
     default_port = 6201
 
     def __init__(self, conf, logger=None):
+        #print("In Container Replicator")
         super(ContainerReplicator, self).__init__(conf, logger=logger)
         self.reconciler_cleanups = self.sync_store = None
 
