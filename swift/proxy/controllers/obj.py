@@ -35,6 +35,8 @@ import math
 import random
 from hashlib import md5
 from swift import gettext_ as _
+import datetime
+import os
 
 from greenlet import GreenletExit
 from eventlet import GreenPile
@@ -148,6 +150,7 @@ class ObjectControllerRouter(object):
         return register_wrapper
 
     def __init__(self):
+        print("In object Controller router")
         self.policy_to_controller_cls = {}
         for policy in POLICIES:
             self.policy_to_controller_cls[int(policy)] = \
@@ -163,6 +166,7 @@ class BaseObjectController(Controller):
 
     def __init__(self, app, account_name, container_name, object_name,
                  **kwargs):
+        print("In object controller")
         super(BaseObjectController, self).__init__(app)
         self.account_name = unquote(account_name)
         self.container_name = unquote(container_name)
@@ -189,6 +193,7 @@ class BaseObjectController(Controller):
         """
         policy_options = self.app.get_policy_options(policy)
         is_local = policy_options.write_affinity_is_local_fn
+        # print("is_local is {}".format(is_local))
         if is_local is None:
             return self.app.iter_nodes(ring, partition, policy=policy)
 
@@ -228,6 +233,7 @@ class BaseObjectController(Controller):
 
     def GETorHEAD(self, req):
         """Handle HTTP GET or HEAD requests."""
+        print('In GETorHEAD function')
         container_info = self.container_info(
             self.account_name, self.container_name, req)
         req.acl = container_info['read_acl']
@@ -326,6 +332,13 @@ class BaseObjectController(Controller):
                           container_partition, containers,
                           delete_at_container=None, delete_at_partition=None,
                           delete_at_nodes=None, container_path=None):
+        '''
+        Added by me:
+        Adds extra headers to the original requests which is to be sent
+        to the backend servers like n_outgoing:number of nodes to send object to,
+        container_partition:partition where the container is located,container:the nodes where
+        the container is located
+        '''
         policy_index = req.headers['X-Backend-Storage-Policy-Index']
         policy = POLICIES.get_by_index(policy_index)
         headers = [self.generate_request_headers(req, additional=req.headers)
@@ -564,6 +577,7 @@ class BaseObjectController(Controller):
         if req.if_none_match is not None and '*' in req.if_none_match:
             statuses = [
                 putter.resp.status for putter in putters if putter.resp]
+            # print("Statuses in _check_failure function {}".format(statuses))
             if HTTP_PRECONDITION_FAILED in statuses:
                 # If we find any copy of the file, it shouldn't be uploaded
                 self.app.logger.debug(
@@ -621,6 +635,7 @@ class BaseObjectController(Controller):
                                      logging information.
         :return: an instance of a Putter
         """
+        # print("(In connect nodes) nodes iter are {}".format(nodes.__dict__.get('unsafe_iter').__dict__))
         self.app.logger.thread_locals = logger_thread_locals
         for node in nodes:
             try:
@@ -645,10 +660,15 @@ class BaseObjectController(Controller):
         Establish connections to storage nodes for PUT request
         """
         obj_ring = policy.object_ring
+        # print("Obj ring is {}".format(obj_ring))
         node_iter = GreenthreadSafeIterator(
             self.iter_nodes_local_first(obj_ring, partition, policy=policy))
+        '''
+        Added by me:
+        This is a pool of green threads used to connect to the 3 backend nodes at the same time
+        '''
         pile = GreenPile(len(nodes))
-
+        # print(pile.__dict__)
         for nheaders in outgoing_headers:
             # RFC2616:8.2.3 disallows 100-continue without a body,
             # so switch to chunked request
@@ -656,17 +676,21 @@ class BaseObjectController(Controller):
                 nheaders['Transfer-Encoding'] = 'chunked'
                 del nheaders['Content-Length']
             nheaders['Expect'] = '100-continue'
+            '''
+            added by me:
+            spawn threads to execute the function _connect_put_node at the same time
+            It will give 3 parallel connections which enables us to talk to the servers at the same time
+            '''
             pile.spawn(self._connect_put_node, node_iter, partition,
                        req, nheaders, self.app.logger.thread_locals)
 
         putters = [putter for putter in pile if putter]
-
         return putters
 
     def _check_min_conn(self, req, putters, min_conns, msg=None):
         msg = msg or _('Object PUT returning 503, %(conns)s/%(nodes)s '
                        'required connections')
-
+        print("In check min conn")
         if len(putters) < min_conns:
             self.app.logger.error((msg),
                                   {'conns': len(putters), 'nodes': min_conns})
@@ -763,37 +787,75 @@ class BaseObjectController(Controller):
     @delay_denial
     def PUT(self, req):
         """HTTP PUT request handler."""
+        print("In PUT request handler")
         if req.if_none_match is not None and '*' not in req.if_none_match:
             # Sending an etag with if-none-match isn't currently supported
             return HTTPBadRequest(request=req, content_type='text/plain',
                                   body='If-None-Match only supports *')
+        '''
+        Added By me :
+        Here we get the info of the container where the object is to be placed.
+        info includes container partition,container nodes(where container is) and acl associated to the container
+        '''
         container_info = self.container_info(
             self.account_name, self.container_name, req)
+        # print(container_info)
+        '''
+        Added by me :
+        Get the policy index from the X-Backend-Storage-Policy-Index header. Default is 0
+        '''
         policy_index = req.headers.get('X-Backend-Storage-Policy-Index',
                                        container_info['storage_policy'])
-        obj_ring = self.app.get_object_ring(policy_index)
+        # print("Policy index is {}".format(policy_index))
+        '''
+        Added by me:
+        Get the appropriate object ring according to the policy index
+        '''
+        obj_ring = self.app.get_object_ring(policy_index)  # app is the proxy server object
+        '''
+        Added by me:
+        We get partition of the sharded container, we also get the nodes which
+        contain the container
+        '''
         container_partition, container_nodes, container_path = \
             self._get_update_target(req, container_info)
+        '''
+        Added by me:
+        Get the partition where the object will go to. Get the deviceS aka nodes(cuz replication) where the objects(replicas) are to be stored
+        '''
         partition, nodes = obj_ring.get_nodes(
             self.account_name, self.container_name, self.object_name)
-
+        print("Partition is {}".format(partition))
+        # print("Nodes is {}".format(nodes))
+        '''
+        Added by me :
+        In the above step we got the partition and nodes where the object should go to
+        '''
         # pass the policy index to storage nodes via req header
+        '''
+        Added By me:
+        We are now modifying the http request with the necessary info
+        for the storage nodes to which the proxy server will pass the
+        request to.
+        '''
         req.headers['X-Backend-Storage-Policy-Index'] = policy_index
         next_part_power = getattr(obj_ring, 'next_part_power', None)
         if next_part_power:
             req.headers['X-Backend-Next-Part-Power'] = next_part_power
-        req.acl = container_info['write_acl']
+        req.acl = container_info['write_acl']  # write acl is a property of the container
         req.environ['swift_sync_key'] = container_info['sync_key']
 
         # is request authorized
         if 'swift.authorize' in req.environ:
+            print("in swift.authorize")
             aresp = req.environ['swift.authorize'](req)
             if aresp:
                 return aresp
-
+        else:
+            print("Didnt go to swift authorize")  # added by me
         if not container_nodes:
+            print("in not container nodes")
             return HTTPNotFound(request=req)
-
         # update content type in case it is missing
         self._update_content_type(req)
 
@@ -804,25 +866,45 @@ class BaseObjectController(Controller):
             check_content_type(req)
         if error_response:
             return error_response
-
+        '''
+        Added by me:
+        reader is still in PUT function!!!! The PUT function continues after this function definition
+        '''
         def reader():
             try:
                 return req.environ['wsgi.input'].read(
                     self.app.client_chunk_size)
             except (ValueError, IOError) as e:
                 raise ChunkReadError(str(e))
+        '''
+        Added by me:
+        reader is reading the object in the chunk size specified when the proxy starts. It returns an iterable if the object is too large and is to be read in chunks. If object is too small then data_source size is 1
+        '''
         data_source = iter(reader, '')
-
+        '''
+        k = 0
+        for i in data_source :
+            k += 1
+            print(i)
+        print(k)
+        '''
         # check if object is set to be automatically deleted (i.e. expired)
         req, delete_at_container, delete_at_part, \
             delete_at_nodes = self._config_obj_expiration(req)
 
         # add special headers to be handled by storage nodes
+        '''
+        Added by me:
+        outgoing headers is a list of size equal to the number of storage nodes to which the
+        request is sent to. Each element of the list contains the headers to be sent to each of the
+        node to which the object is written to. They give the extra information needed by the storage nodes
+        '''
         outgoing_headers = self._backend_requests(
             req, len(nodes), container_partition, container_nodes,
             delete_at_container, delete_at_part, delete_at_nodes,
             container_path=container_path)
-
+        #for i in range(len(outgoing_headers)):
+        #    print(outgoing_headers[i])
         # send object to storage nodes
         resp = self._store_object(
             req, data_source, nodes, partition, outgoing_headers)
@@ -897,7 +979,11 @@ class ReplicatedObjectController(BaseObjectController):
                 logger=self.app.logger,
                 need_multiphase=False)
         else:
+            print("In putter")
+            print("In putter node is {}".format(node))
+            print("In putter part is {}".format(part))
             te = ',' + headers.get('Transfer-Encoding', '')
+            print("Entity path is {}".format(req.swift_entity_path))
             putter = Putter.connect(
                 node, part, req.swift_entity_path, headers,
                 conn_timeout=self.app.conn_timeout,
@@ -912,9 +998,25 @@ class ReplicatedObjectController(BaseObjectController):
 
         This method was added in the PUT method extraction change
         """
+        '''
+        Added by me:
+        bytes_transferred keeps track of the number bytes transferred. To check whether enough amount
+        of data is sent
+        '''
+        '''
+        Added by me:
+        In this function, there is a queue where all the chunks of the object to be stored are put.
+        The objects in the queue are sent down a socket( all 3 sockets) at the same time using threads.
+        Queue is used to throw all chunks of data to 3 sockets(for 3 nodes).
+        '''
         bytes_transferred = 0
-
+        '''
+        Added by me:
+        Here we send the data chunk to the 3 sockets at the same time. We write one function send_chunk
+        to give better readability
+        '''
         def send_chunk(chunk):
+            print('In send_chunk in _transfer_data')
             for putter in list(putters):
                 if not putter.failed:
                     putter.send_chunk(chunk)
@@ -927,23 +1029,43 @@ class ReplicatedObjectController(BaseObjectController):
                       '%(conns)s/%(nodes)s required connections'))
 
         min_conns = quorum_size(len(nodes))
+        '''
+        Added by me:
+        ContextPool is a GreenPool of threads(Pool of green threads). There are 3 threads
+        (equal to the number of nodes). The threads are killed once the 'with' statement finishes
+        '''
         try:
             with ContextPool(len(nodes)) as pool:
+                '''
+                Added by me:
+                Threads will be created by ContextPool when we enter the with
+                Threads will die when we exit the 'with'
+                '''
                 for putter in putters:
                     putter.spawn_sender_greenthread(
                         pool, self.app.put_queue_depth, self.app.node_timeout,
                         self.app.exception_occurred)
                 while True:
+                    print("Bytes trans in _transfer_data before loop is {}".format(bytes_transferred))
+
                     with ChunkReadTimeout(self.app.client_timeout):
                         try:
+                            '''
+                            Added by me:
+                            chunk is the data to be put in the socket
+                            '''
                             chunk = next(data_source)
                         except StopIteration:
                             break
                     bytes_transferred += len(chunk)
                     if bytes_transferred > constraints.MAX_FILE_SIZE:
                         raise HTTPRequestEntityTooLarge(request=req)
-
+                    '''
+                    Added by me:
+                    send_chunk will send the chunk of data down a socket
+                    '''
                     send_chunk(chunk)
+                    print("Bytes trans in _transfer_data after loop is {}".format(bytes_transferred))
 
                 if req.content_length and (
                         bytes_transferred < req.content_length):
@@ -952,14 +1074,24 @@ class ReplicatedObjectController(BaseObjectController):
                         _('Client disconnected without sending enough data'))
                     self.app.logger.increment('client_disconnects')
                     raise HTTPClientDisconnect(request=req)
-
+                print("Checked whether content_length is greater than bytes_transferred cause thats wrong ")
                 trail_md = self._get_footers(req)
                 for putter in putters:
                     # send any footers set by middleware
                     putter.end_of_object_data(footer_metadata=trail_md)
-
+                print('Going to putter.wait() loop')
                 for putter in putters:
+                    '''
+                    Added by me:
+                    After this the green threads which spawned to execute _send_file will be executed as
+                    the threads can be executed now. The threads are executed in 1 itieration as they run parallely
+                    '''
                     putter.wait()
+                print("Left putter.wait loop")
+                '''
+                Added by me:
+                Check whether connections have not failed
+                '''
                 self._check_min_conn(
                     req, [p for p in putters if not p.failed], min_conns,
                     msg=_('Object PUT exceptions after last send, '
@@ -1000,13 +1132,38 @@ class ReplicatedObjectController(BaseObjectController):
         nodes. After sending the data, the "best" response will be
         returned based on statuses from all connections
         """
+        '''
+        Added by me:
+        Dont explicitly pass policy_index as param as we can retrive that
+        from req.headers
+        '''
         policy_index = req.headers.get('X-Backend-Storage-Policy-Index')
         policy = POLICIES.get_by_index(policy_index)
+        '''
+        added by me:
+        Till here the policy index is retrived from the request object and
+        policy is retrived from the from the POLICIES global class
+        '''
+        '''
+        added by me:
+        if there are no nodes then return HTTP Not Found
+        '''
         if not nodes:
             return HTTPNotFound()
-
+        '''
+        Added by me:
+        Creates a putter object for each node(used to 'PUT' data into the node). It is a list of
+        putter objects to connect to each node(3 in the default case).  The connections are parallelized using green thread
+        we cant connect to the 3 servers at the same time if we didnt use greenthreads(or threads in general)
+        '''
         putters = self._get_put_connections(
             req, nodes, partition, outgoing_headers, policy)
+        print("Putters : {}".format(putters))
+        '''
+        added by me:
+        min_conns is the minimum number of writes required for the
+        proxy to return a successful write response back to the server
+        '''
         min_conns = quorum_size(len(nodes))
         try:
             # check that a minimum number of connections were established and
@@ -1017,14 +1174,28 @@ class ReplicatedObjectController(BaseObjectController):
             self._transfer_data(req, data_source, putters, nodes)
 
             # get responses
+            '''
+            added by me:
+            we get responses back from each server. each return value is a list of size equal to the
+            number of replicas we create
+            '''
             statuses, reasons, bodies, etags = \
                 self._get_put_responses(req, putters, len(nodes))
+            print("statuses : {}".format(statuses))
+            print("reasons : {}".format(reasons))
+            print("bodies : {}".format(bodies))
+            print("etags : {}".format(etags))
         except HTTPException as resp:
             return resp
         finally:
             for putter in putters:
                 putter.close()
-
+        '''
+        added by me:
+        if more than 1 etags are returned, it means that different versions of the object are
+        present in the servers which should not happen. I belive it is also a good check to see
+        whether the objects were written properly to the servers
+        '''
         if len(etags) > 1:
             self.app.logger.error(
                 _('Object servers returned %s mismatched etags'), len(etags))
@@ -1608,6 +1779,7 @@ class Putter(object):
                  chunked=False):
         # Note: you probably want to call Putter.connect() instead of
         # instantiating one of these directly.
+        print("You created a putter!!")
         self.conn = conn
         self.node = node
         self.resp = self.final_resp = resp
@@ -1652,10 +1824,23 @@ class Putter(object):
     def spawn_sender_greenthread(self, pool, queue_depth, write_timeout,
                                  exception_handler):
         """Call before sending the first chunk of request body"""
+        '''
+        Added by me:
+        Queue is created for what?
+        '''
         self.queue = Queue(queue_depth)
+        print("Queue in func spawn_sender_greenthread : {}".format(self.queue.__dict__))
+        print("In spawn_sender_greenthread")
+        '''
+        Added by me:
+        Threads are spawned to execute the send_file function. Once spawn is executed, the
+        control is returned back to spawn_sender_greenthread and the threads are scheduled
+        '''
         pool.spawn(self._send_file, write_timeout, exception_handler)
 
     def wait(self):
+        print("in wait")
+        print("Queue in wait {} ".format(self.queue.__dict__))
         if self.queue.unfinished_tasks:
             self.queue.join()
 
@@ -1665,6 +1850,7 @@ class Putter(object):
         pass
 
     def send_chunk(self, chunk):
+        print("In send_chunk")
         if not chunk:
             # If we're not using chunked transfer-encoding, sending a 0-byte
             # chunk is just wasteful. If we *are* using chunked
@@ -1677,16 +1863,22 @@ class Putter(object):
         if self.state == NO_DATA_SENT:
             self._start_object_data()
             self.state = SENDING_DATA
-
+        print("Queue is in send_chunk of putter before queue.put is {}".format(self.queue.__dict__))
         self.queue.put(chunk)
+        print("Queue is in send_chunk of putter after queue.put is {}".format(self.queue.__dict__))
 
     def end_of_object_data(self, **kwargs):
         """
         Call when there is no more data to send.
         """
+        print("In end_of_object_data")
         if self.state == DATA_SENT:
             raise ValueError("called end_of_object_data twice")
-
+        '''
+        Added by me:
+        Here unfinished tasks increase to 2. We end the data chunk by enqueueing '' to the object
+        This is to notify the object server that the chunk has ended
+        '''
         self.queue.put('')
         self.state = DATA_SENT
 
@@ -1698,15 +1890,39 @@ class Putter(object):
         If something goes wrong, the "failed" attribute will be set to true
         and the exception handler will be called.
         """
+        '''
+        Added by me:
+        This function is executed by the green threads after end_of_object_data as time is
+        available for the threads to execute after the end_of_object_data. the chunk is sent to each
+        node.
+        '''
+        # print("Queue in func send_file after spawn_sender_greenthread {} ".format(self.queue.__dict__))
+        print("Node whose socket data is being sent to {}".format(self.node))
+        # print("Executed at {}".format(datetime.datetime.now()))
+        print("pid is {}".format(os.getpid()))
         while True:
             chunk = self.queue.get()
+            print("Chunk is {}".format(chunk))
             if not self.failed:
                 if self.chunked:
+                    '''
+                    Added by me:
+                    If object is chunked then also provide the chunk length
+                    '''
                     to_send = "%x\r\n%s\r\n" % (len(chunk), chunk)
                 else:
+                    '''
+                    Added by me:
+                    Send the entire chunk which is the entire object
+                    '''
                     to_send = chunk
                 try:
                     with ChunkWriteTimeout(write_timeout):
+                        '''
+                        Added by me:
+                        Here the data is being sent to the socket.
+                        The object server will read from the socket using the TimeOut Reader
+                        '''
                         self.conn.send(to_send)
                 except (Exception, ChunkWriteTimeout):
                     self.failed = True
@@ -1714,6 +1930,7 @@ class Putter(object):
                                       _('Trying to write to %s') % self.path)
 
             self.queue.task_done()
+            print("Queue after _send_file is {}".format(self.queue.__dict__))
 
     def close(self):
         # release reference to response to ensure connection really does close,
@@ -1728,11 +1945,15 @@ class Putter(object):
         with ConnectionTimeout(conn_timeout):
             conn = http_connect(node['ip'], node['port'], node['device'],
                                 part, 'PUT', path, headers)
+            print("Got connection")
         connect_duration = time.time() - start_time
-
+        '''
+        Added by me:
+        this will connect to the back end storage node
+        '''
         with ResponseTimeout(node_timeout):
             resp = conn.getexpect()
-
+        print("Response is {}".format(resp.__dict__))
         if resp.status == HTTP_INSUFFICIENT_STORAGE:
             raise InsufficientStorage
 
@@ -1761,6 +1982,11 @@ class Putter(object):
         :raises InsufficientStorage: on 507 response from node
         :raises PutterConnectError: on non-507 server error response from node
         """
+        '''
+		Added by me:
+		make_connection makes a http connection with the backend storage node given
+		the backend storage nodes IP which is provided in the nodes dictionary
+        '''
         conn, expect_resp, final_resp, connect_duration = cls._make_connection(
             node, part, path, headers, conn_timeout, node_timeout)
         return cls(conn, node, final_resp, path, connect_duration, logger,
