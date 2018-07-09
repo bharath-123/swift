@@ -16,6 +16,7 @@
 
 import sys
 from optparse import OptionParser
+import pdb
 
 from swift.common.manager import Manager, UnknownCommandError, \
     KILL_WAIT, RUN_DIR
@@ -87,6 +88,7 @@ def main():
                       action='store_true',
                       help="Kill daemon and all children after kill-wait "
                            "period.")
+    #pdb.set_trace()
 
     options, args = parser.parse_args()
 
