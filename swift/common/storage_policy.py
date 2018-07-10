@@ -183,7 +183,10 @@ class BaseStoragePolicy(object):
         if self.is_deprecated and self.is_default:
             raise PolicyError('Deprecated policy can not be default.  '
                               'Invalid config', self.idx)
-
+        '''
+        Added by me:
+        I didnt understand how self.ring_name is determined
+        '''
         self.ring_name = _get_policy_string('object', self.idx)
         self.object_ring = object_ring
 
@@ -797,7 +800,12 @@ class StoragePolicyCollection(object):
         :param swift_dir: swift_dir used by the caller
         :returns: appropriate ring object
         """
+        '''
+        Added by me:
+        Get the policy associated with the policy index
+        '''
         policy = self.get_by_index(policy_idx)
+        print("Policy is {}".format(policy))
         if not policy:
             raise PolicyError("No policy with index %s" % policy_idx)
         if not policy.object_ring:
