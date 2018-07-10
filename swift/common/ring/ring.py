@@ -83,13 +83,25 @@ class RingData(object):
 
         if metadata_only:
             return ring_dict
-
+        '''
+        Added by me:
+        This checks whether the byte order(little endian or big endian) of the ring file is
+        the same as that of the server processor. If not we reverse the bytes
+        '''
         byteswap = (ring_dict.get('byteorder', sys.byteorder) != sys.byteorder)
-
+        print("byte order is {}".format(ring_dict.get('byteorder')))
+        '''
+        Added by me:
+        The number of partitions present(1024 or 2**10). 10 is the part power
+        '''
         partition_count = 1 << (32 - ring_dict['part_shift'])
         for x in range(ring_dict['replica_count']):
             part2dev = array.array('H', gz_file.read(2 * partition_count))
             if byteswap:
+                '''
+                Added by me:
+                Change the byte order if wrong
+                '''
                 part2dev.byteswap()
             ring_dict['replica2part2dev_id'].append(part2dev)
 
@@ -258,7 +270,7 @@ class Ring(object):
 
             self._replica2part2dev_id = ring_data._replica2part2dev_id
             self._part_shift = ring_data._part_shift
-            self._rebuild_tier_data()
+            self._rebuild_tier_data()  # idk what this is
 
             # Do this now, when we know the data has changed, rather than
             # doing it on every call to get_more_nodes().
@@ -433,7 +445,15 @@ class Ring(object):
         See :func:`get_nodes` for a description of the node dicts.
         """
         if time() > self._rtime:
+            '''
+            Added by me:
+            Reload every 15 secs
+            '''
             self._reload()
+        '''
+        added by me:
+        get the primary nodes
+        '''
         primary_nodes = self._get_part_nodes(part)
 
         used = set(d['id'] for d in primary_nodes)
