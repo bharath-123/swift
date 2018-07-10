@@ -1482,6 +1482,7 @@ def main(arguments=None):
 
     try:
         builder = RingBuilder.load(builder_file)
+        print("The builder file is {}".format(builder.__dict__))
     except exceptions.UnPicklingError as e:
         print(e)
         exit(EXIT_ERROR)
