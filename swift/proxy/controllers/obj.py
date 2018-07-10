@@ -663,6 +663,7 @@ class BaseObjectController(Controller):
         # print("Obj ring is {}".format(obj_ring))
         node_iter = GreenthreadSafeIterator(
             self.iter_nodes_local_first(obj_ring, partition, policy=policy))
+        print('Nodes iter is {}'.format(node_iter))
         '''
         Added by me:
         This is a pool of green threads used to connect to the 3 backend nodes at the same time
