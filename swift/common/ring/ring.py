@@ -444,6 +444,7 @@ class Ring(object):
 
         See :func:`get_nodes` for a description of the node dicts.
         """
+        print("---------------------------------------------------------------In get more nodes-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------")
         if time() > self._rtime:
             '''
             Added by me:
@@ -452,22 +453,39 @@ class Ring(object):
             self._reload()
         '''
         added by me:
-        get the primary nodes
+        get the primary nodes which are mapped to the particular partition regardless of whether the node is working or not
         '''
         primary_nodes = self._get_part_nodes(part)
-
+        '''
+        Added by me:
+        These are the devices which are used
+        '''
         used = set(d['id'] for d in primary_nodes)
         same_regions = set(d['region'] for d in primary_nodes)
         same_zones = set((d['region'], d['zone']) for d in primary_nodes)
         same_ips = set(
             (d['region'], d['zone'], d['ip']) for d in primary_nodes)
-
+        print("Used is {}".format(used))
+        print("same regions is {}".format(same_regions))
+        print("same zones is {}".format(same_zones))
+        print("same ips is {}".format(same_ips))
+        '''
+        Added by me:
+        Why did they do this????
+        '''
         parts = len(self._replica2part2dev_id[0])
+        print("Parts : {}".format(parts))
         part_hash = md5(str(part).encode('ascii')).digest()
         start = struct.unpack_from('>I', part_hash)[0] >> self._part_shift
+        print("part_shift is {}".format(self._part_shift))
+        print("start is {}".format(start))
         inc = int(parts / 65536) or 1
         # Multiple loops for execution speed; the checks and bookkeeping get
         # simpler as you go along
+        '''
+        Added by me:
+        The placement algorithm begins
+        '''
         hit_all_regions = len(same_regions) == self._num_regions
         for handoff_part in chain(range(start, parts, inc),
                                   range(inc - ((parts - start) % inc),
@@ -476,6 +494,7 @@ class Ring(object):
                 # At this point, there are no regions left untouched, so we
                 # can stop looking.
                 break
+            print("In hit all regions")
             for part2dev_id in self._replica2part2dev_id:
                 if handoff_part < len(part2dev_id):
                     dev_id = part2dev_id[handoff_part]
@@ -501,18 +520,28 @@ class Ring(object):
                 # Much like we stopped looking for fresh regions before, we
                 # can now stop looking for fresh zones; there are no more.
                 break
+            print("in hit all zones")
             for part2dev_id in self._replica2part2dev_id:
                 if handoff_part < len(part2dev_id):
+                    '''
+                    Added by me:
+                    A partition is present on 3 devices, we are checking whether the handoff partition can be used on any one of the devices
+                    '''
                     dev_id = part2dev_id[handoff_part]
                     dev = self._devs[dev_id]
                     zone = (dev['region'], dev['zone'])
                     if dev_id not in used and zone not in same_zones:
                         yield dev
-                        used.add(dev_id)
-                        same_zones.add(zone)
-                        ip = zone + (dev['ip'],)
-                        same_ips.add(ip)
-                        if len(same_zones) == self._num_zones:
+                        print("after yield dev in hit all zones")
+                        '''
+                        Added by me:
+                        Goes here if multiple hand off nodes are required
+                        '''
+                        used.add(dev_id)  # add to used devices
+                        same_zones.add(zone)  # add to same_zones i.e the zone has been used
+                        ip = zone + (dev['ip'],)  # add to same_ips i.e the ip has been used
+                        same_ips.add(ip)  # add to same_ips
+                        if len(same_zones) == self._num_zones:  # if all zones are used then we hit all zones, that means cannot place the replica uniquely
                             hit_all_zones = True
                             break
 
@@ -524,6 +553,7 @@ class Ring(object):
                 # We've exhausted the pool of unused backends, so stop
                 # looking.
                 break
+            print("in hit all ips")
             for part2dev_id in self._replica2part2dev_id:
                 if handoff_part < len(part2dev_id):
                     dev_id = part2dev_id[handoff_part]
