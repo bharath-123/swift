@@ -663,7 +663,6 @@ class BaseObjectController(Controller):
         # print("Obj ring is {}".format(obj_ring))
         node_iter = GreenthreadSafeIterator(
             self.iter_nodes_local_first(obj_ring, partition, policy=policy))
-        print('Nodes iter is {}'.format(node_iter))
         '''
         Added by me:
         This is a pool of green threads used to connect to the 3 backend nodes at the same time
@@ -826,8 +825,8 @@ class BaseObjectController(Controller):
         '''
         partition, nodes = obj_ring.get_nodes(
             self.account_name, self.container_name, self.object_name)
-        print("Partition is {}".format(partition))
-        # print("Nodes is {}".format(nodes))
+        # print("Partition is {}".format(partition))
+        print("Nodes are {}".format(nodes))
         '''
         Added by me :
         In the above step we got the partition and nodes where the object should go to
