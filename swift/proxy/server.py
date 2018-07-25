@@ -44,6 +44,7 @@ from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
     HTTPMethodNotAllowed, HTTPNotFound, HTTPPreconditionFailed, \
     HTTPServerError, HTTPException, Request, HTTPServiceUnavailable
 from swift.common.exceptions import APIVersionError
+from cache import Cache
 
 
 # List of entry points for mandatory middlewares.
@@ -177,6 +178,8 @@ class Application(object):
 
         swift_dir = conf.get('swift_dir', '/etc/swift')
         self.swift_dir = swift_dir
+        self.cache_dir = conf.get('cache_dir', '/var/cache/swift_cache')
+        self.cache_controller = Cache(self.cache_dir)
         self.node_timeout = float(conf.get('node_timeout', 10))
         self.recoverable_node_timeout = float(
             conf.get('recoverable_node_timeout', self.node_timeout))
@@ -245,6 +248,7 @@ class Application(object):
         self.concurrency_timeout = float(conf.get('concurrency_timeout',
                                                   self.conn_timeout))
         value = conf.get('request_node_count', '2 * replicas').lower().split()
+        print("@@@@@@@@@{}@@@@@@@@@".format(value))
         if len(value) == 1:
             rnc_value = int(value[0])
             self.request_node_count = lambda replicas: rnc_value
@@ -472,6 +476,7 @@ class Application(object):
         print("In handle request function")
         # Added by me :
         # Checks whether content length is correct
+        print("Request is {}".format(req.__dict__))
         try:
             self.logger.set_statsd_prefix('proxy-server')
             if req.content_length and req.content_length < 0:
@@ -524,7 +529,10 @@ class Application(object):
             if self.deny_host_headers and \
                     req.host.split(':')[0] in self.deny_host_headers:
                 return HTTPForbidden(request=req, body='Invalid host header')
-
+            '''
+            Added by me:
+            Add cache code here
+            '''
             self.logger.set_statsd_prefix('proxy-server.' +
                                           controller.server_type.lower())
             '''
@@ -590,9 +598,20 @@ class Application(object):
                 if old_authorize:  # if successfully authorized
                     req.environ.pop('swift.authorize', None)
                     print("authorized?")
-                x = handler(req)
-                print("handler(req) is {}".format(x))
-                return x
+                '''
+                Add cache code here
+                '''
+                if req.method == 'GET':
+                    resp = self.cache_controller.read_from_cache(req)
+                    if resp:
+                        return resp
+                if req.method == 'PUT':
+                    resp = self.cache_controller.write_to_cache(req)
+                    print(resp)
+                    if resp:
+                        print("returingni resp)#(*(&!@#(*&^!*&#^)!@(*)@(!")
+                        return resp
+                return handler(req)
             finally:
                 if old_authorize:
                     req.environ['swift.authorize'] = old_authorize
