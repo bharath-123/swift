@@ -553,8 +553,8 @@ class Ring(object):
                 # We've exhausted the pool of unused backends, so stop
                 # looking.
                 break
-            print("in hit all ips")
             for part2dev_id in self._replica2part2dev_id:
+                print("in hit all ips")
                 if handoff_part < len(part2dev_id):
                     dev_id = part2dev_id[handoff_part]
                     dev = self._devs[dev_id]
