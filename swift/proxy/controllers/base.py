@@ -1370,7 +1370,7 @@ class NodeIter(object):
             node_iter = itertools.chain(
                 part_nodes, ring.get_more_nodes(partition))
         num_primary_nodes = len(part_nodes)
-        self.nodes_left = self.app.request_node_count(num_primary_nodes)
+        self.nodes_left = self.app.request_node_count(num_primary_nodes)  # ?
         self.expected_handoffs = self.nodes_left - num_primary_nodes
 
         # Use of list() here forcibly yanks the first N nodes (the primary
@@ -1420,6 +1420,11 @@ class NodeIter(object):
         self._node_provider = callback
 
     def _node_gen(self):
+        '''
+        Added by me:
+        It will iterator thru the slice of the chain(see init), and then it will iterate thru the remaining
+        of node_iter if handoff nodes are needed.
+        '''
         for node in self.primary_nodes:
             if not self.app.error_limited(node):
                 yield node
@@ -1427,6 +1432,10 @@ class NodeIter(object):
                     self.nodes_left -= 1
                     if self.nodes_left <= 0:
                         return
+        '''
+        Added by me:
+        It will come here only when handoff nodes are needed.
+        '''
         handoffs = 0
         for node in self.handoff_iter:
             if not self.app.error_limited(node):
