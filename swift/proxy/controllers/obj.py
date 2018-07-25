@@ -35,7 +35,6 @@ import math
 import random
 from hashlib import md5
 from swift import gettext_ as _
-import datetime
 import os
 
 from greenlet import GreenletExit
@@ -638,6 +637,11 @@ class BaseObjectController(Controller):
         # print("(In connect nodes) nodes iter are {}".format(nodes.__dict__.get('unsafe_iter').__dict__))
         self.app.logger.thread_locals = logger_thread_locals
         for node in nodes:
+            '''
+            Added by me:
+            Ideally each thread should call the __next__ function only once. A thread will call it __next__ once more
+            if the node has failed and we need a handoff node.
+            '''
             try:
                 putter = self._make_putter(node, part, req, headers)
                 self.app.set_node_timing(node, putter.connect_duration)
@@ -661,6 +665,11 @@ class BaseObjectController(Controller):
         """
         obj_ring = policy.object_ring
         # print("Obj ring is {}".format(obj_ring))
+        '''
+        Added by me:
+        This is a thread-safe way to iterate thru node_iter since 2 theads will be accessing node_iters.
+        It uses a semaphore to keep control of critical data.
+        '''
         node_iter = GreenthreadSafeIterator(
             self.iter_nodes_local_first(obj_ring, partition, policy=policy))
         '''
